@@ -1,13 +1,10 @@
-from enum import Enum
-
 from django.core import checks
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models.fields import BLANK_CHOICE_DASH
 from django.utils.functional import cached_property
 from django.utils.module_loading import import_string
 
-from .forms import EnumChoiceField
+from . import forms
 
 
 class CastOnAssignDescriptor:
@@ -31,45 +28,38 @@ class CastOnAssignDescriptor:
 
 
 class EnumFieldMixin:
+
+    descriptor_class = CastOnAssignDescriptor
+
     def __init__(self, enum, **options):
         if isinstance(enum, str):
-            self.enum = import_string(enum)
-        else:
-            self.enum = enum
-
+            enum = import_string(enum)
+        self.enum = enum
         if "choices" not in options:
-            options["choices"] = [  # choices for the TypedChoiceField
-                (i, getattr(i, 'label', i.name))
-                for i in self.enum
-            ]
-
+            options["choices"] = [(i, getattr(i, 'label', i.name)) for i in self.enum]
         super().__init__(**options)
-
-    def contribute_to_class(self, cls, name):
-        super().contribute_to_class(cls, name)
-        setattr(cls, name, CastOnAssignDescriptor(self))
 
     def to_python(self, value):
         if value is None or value == '':
             return None
-        if isinstance(value, self.enum):
-            return value
-        for m in self.enum:
-            if value == m:
-                return m
-            if value == m.value or str(value) == str(m.value) or str(value) == str(m):
-                return m
-        raise ValidationError('{} is not a valid value for enum {}'.format(value, self.enum), code="invalid_enum_value")
+        try:
+            return self.enum(value)
+        except ValueError:
+            if isinstance(value, str):
+                try:
+                    return next(m for m in self.enum if str(m.value) == value or str(m) == value)
+                except StopIteration:
+                    pass
+            raise ValidationError(
+                '{} is not a valid value for enum {}'.format(value, self.enum),
+                code="invalid_enum_value"
+            )
 
     def get_prep_value(self, value):
-        if value is None:
-            return None
-        if isinstance(value, self.enum):  # Already the correct type -- fast path
-            return value.value
-        return self.to_python(value).value
-
-    def from_db_value(self, value, expression, connection, *args):
-        return self.to_python(value)
+        value = self.to_python(value)
+        if value is not None:
+            value = value.value
+        return value
 
     def value_to_string(self, obj):
         value = self.value_from_object(obj)
@@ -84,29 +74,22 @@ class EnumFieldMixin:
     def deconstruct(self):
         name, path, args, kwargs = super().deconstruct()
         kwargs['enum'] = self.enum
-        kwargs.pop('choices', None)
-        if 'default' in kwargs:
-            if hasattr(kwargs["default"], "value"):
-                kwargs["default"] = kwargs["default"].value
-
+        del kwargs['choices']
         return name, path, args, kwargs
 
-    def get_choices(self, include_blank=True, blank_choice=BLANK_CHOICE_DASH):
+    def get_choices(self, **kwargs):
         # Force enum fields' options to use the `value` of the enumeration
         # member as the `value` of SelectFields and similar.
         return [
-            (i.value if isinstance(i, Enum) else i, display)
+            (i.value if isinstance(i, self.enum) else i, display)
             for (i, display)
-            in super(EnumFieldMixin, self).get_choices(include_blank, blank_choice)
+            in super().get_choices(**kwargs)
         ]
 
     def formfield(self, form_class=None, choices_form_class=None, **kwargs):
-        if not choices_form_class:
-            choices_form_class = EnumChoiceField
-
         return super().formfield(
             form_class=form_class,
-            choices_form_class=choices_form_class,
+            choices_form_class=choices_form_class or forms.EnumChoiceField,
             **kwargs
         )
 
