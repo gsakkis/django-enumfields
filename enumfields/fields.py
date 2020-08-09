@@ -1,7 +1,5 @@
-from django.core import checks
 from django.core.exceptions import ValidationError
-from django.db import models
-from django.utils.functional import cached_property
+from django.db.models import Field
 from django.utils.module_loading import import_string
 
 from . import forms
@@ -27,7 +25,7 @@ class CastOnAssignDescriptor:
         obj.__dict__[self.field.name] = self.field.to_python(value)
 
 
-class EnumFieldMixin:
+class BaseEnumField(Field):
 
     descriptor_class = CastOnAssignDescriptor
 
@@ -94,46 +92,30 @@ class EnumFieldMixin:
         )
 
 
-class EnumField(EnumFieldMixin, models.CharField):
+class EnumField(BaseEnumField):
+
     def __init__(self, enum, **kwargs):
         kwargs.setdefault("max_length", 10)
         super().__init__(enum, **kwargs)
-        self.validators = []
 
     def check(self, **kwargs):
-        return [
-            *super().check(**kwargs),
-            *self._check_max_length_fit(**kwargs),
-        ]
+        # The base Field.check() calls _check_choices, which checks if 'max_length' is too small
+        # to fit the longest choice. However this works only if the choice values are strings,
+        # not enum members. So we create a new temporary (shallow) copy of this field, change its
+        # choices to (string) enum values and check that instead.
+        other = self.__copy__()
+        other.choices = other.get_choices()
+        errors = super(EnumField, other).check(**kwargs)
+        # point the errors back to self
+        for error in errors:
+            error.obj = self
+        return errors
 
-    def _check_max_length_fit(self, **kwargs):
-        if isinstance(self.max_length, int):
-            unfit_values = [e for e in self.enum if len(str(e.value)) > self.max_length]
-            if unfit_values:
-                fit_max_length = max([len(str(e.value)) for e in self.enum])
-                message = (
-                    "Values {unfit_values} of {enum} won't fit in "
-                    "the backing CharField (max_length={max_length})."
-                ).format(
-                    unfit_values=unfit_values,
-                    enum=self.enum,
-                    max_length=self.max_length,
-                )
-                hint = "Setting max_length={fit_max_length} will resolve this.".format(
-                    fit_max_length=fit_max_length,
-                )
-                return [
-                    checks.Warning(message, hint=hint, obj=self, id="enumfields.max_length_fit"),
-                ]
-        return []
+    def get_internal_type(self):
+        return "CharField"
 
 
-class EnumIntegerField(EnumFieldMixin, models.IntegerField):
-    @cached_property
-    def validators(self):
-        # Skip IntegerField validators, since they will fail with
-        #   TypeError: unorderable types: TheEnum() < int()
-        # when used database reports min_value or max_value from
-        # connection.ops.integer_field_range method.
-        next = super(models.IntegerField, self)
-        return next.validators
+class EnumIntegerField(BaseEnumField):
+
+    def get_internal_type(self):
+        return "IntegerField"
