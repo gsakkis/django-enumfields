@@ -1,6 +1,7 @@
 from django.core.exceptions import ValidationError
 from django.db.models import Field
 from django.utils.module_loading import import_string
+from django.utils.translation import gettext_lazy as _
 
 from . import forms
 
@@ -27,6 +28,11 @@ class CastOnAssignDescriptor:
 
 class BaseEnumField(Field):
 
+    default_error_messages = {
+        'invalid': _('“%(value)s” is not a valid value for %(enum)s.'),
+    }
+    description = _("Enumeration for %(enum)s")
+
     descriptor_class = CastOnAssignDescriptor
 
     def __init__(self, enum, **options):
@@ -49,8 +55,9 @@ class BaseEnumField(Field):
                 except StopIteration:
                     pass
             raise ValidationError(
-                '{} is not a valid value for enum {}'.format(value, self.enum),
-                code="invalid_enum_value"
+                self.error_messages['invalid'],
+                code='invalid',
+                params={'value': value, 'enum': self.enum},
             )
 
     def get_prep_value(self, value):

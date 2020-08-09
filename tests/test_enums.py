@@ -59,7 +59,8 @@ def test_formfield_functionality():
 def test_invalid_to_python_fails():
     with pytest.raises(ValidationError) as ve:
         EnumField(Color).to_python("invalid")
-    assert ve.value.code == "invalid_enum_value"
+    assert ve.value.code == "invalid"
+    assert ve.value.messages == ["“invalid” is not a valid value for <enum 'Color'>."]
 
 
 def test_import_by_string():
