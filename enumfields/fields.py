@@ -95,8 +95,9 @@ class BaseEnumField(Field):
 class EnumField(BaseEnumField):
 
     def __init__(self, enum, **kwargs):
-        kwargs.setdefault("max_length", 10)
         super().__init__(enum, **kwargs)
+        if self.max_length is None:
+            self.max_length = max(len(str(m.value)) for m in self.enum)
 
     def check(self, **kwargs):
         # The base Field.check() calls _check_choices, which checks if 'max_length' is too small

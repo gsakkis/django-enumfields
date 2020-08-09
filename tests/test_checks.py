@@ -3,6 +3,12 @@ from django.db import models
 from tests.enums import LabeledEnum
 
 
+def test_default_max_length():
+    class TestModel(models.Model):
+        f = EnumField(LabeledEnum, blank=True, null=True)
+    assert TestModel.f.field.max_length == 6
+
+
 def test_shortness_check():
     class TestModel(models.Model):
         f1 = EnumField(LabeledEnum, max_length=-3, blank=True, null=True)
