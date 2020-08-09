@@ -1,5 +1,7 @@
+from functools import partial
+
 from django.core.exceptions import ValidationError
-from django.db.models import Field
+from django.db import models
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
@@ -26,7 +28,7 @@ class CastOnAssignDescriptor:
         obj.__dict__[self.field.name] = self.field.to_python(value)
 
 
-class BaseEnumField(Field):
+class EnumField(models.Field):
 
     default_error_messages = {
         'invalid': _('“%(value)s” is not a valid value for %(enum)s.'),
@@ -35,13 +37,33 @@ class BaseEnumField(Field):
 
     descriptor_class = CastOnAssignDescriptor
 
-    def __init__(self, enum, **options):
+    def __init__(self, enum, internal_class=models.CharField, **options):
         if isinstance(enum, str):
             enum = import_string(enum)
+
+        if options.get("choices") is None:
+            options["choices"] = [(i, getattr(i, 'label', i.name)) for i in enum]
+        if options.get("max_length") is None:
+            options["max_length"] = max(len(str(m.value)) for m in enum)
+
         self.enum = enum
-        if "choices" not in options:
-            options["choices"] = [(i, getattr(i, 'label', i.name)) for i in self.enum]
+        self.internal_class = internal_class
+        self.internal_type = internal_class(**options).get_internal_type()
+        self.empty_strings_allowed = internal_class.empty_strings_allowed
         super().__init__(**options)
+
+    def check(self, **kwargs):
+        # The base Field.check() calls _check_choices, which checks if 'max_length' is too small
+        # to fit the longest choice. However this works only if the choice values are strings,
+        # not enum members. So create a new temporary (shallow) copy of this field, change its
+        # choices to enum values and check that instead.
+        other = self.__copy__()
+        other.choices = other.get_choices()
+        errors = super(EnumField, other).check(**kwargs)
+        # point the errors back to self
+        for error in errors:
+            error.obj = self
+        return errors
 
     def to_python(self, value):
         if value is None or value == '':
@@ -59,6 +81,9 @@ class BaseEnumField(Field):
                 code='invalid',
                 params={'value': value, 'enum': self.enum},
             )
+
+    def get_internal_type(self):
+        return self.internal_type
 
     def get_prep_value(self, value):
         value = self.to_python(value)
@@ -78,8 +103,7 @@ class BaseEnumField(Field):
 
     def deconstruct(self):
         name, path, args, kwargs = super().deconstruct()
-        kwargs['enum'] = self.enum
-        del kwargs['choices']
+        kwargs.update(enum=self.enum, internal_class=self.internal_class)
         return name, path, args, kwargs
 
     def get_choices(self, **kwargs):
@@ -99,31 +123,4 @@ class BaseEnumField(Field):
         )
 
 
-class EnumField(BaseEnumField):
-
-    def __init__(self, enum, **kwargs):
-        super().__init__(enum, **kwargs)
-        if self.max_length is None:
-            self.max_length = max(len(str(m.value)) for m in self.enum)
-
-    def check(self, **kwargs):
-        # The base Field.check() calls _check_choices, which checks if 'max_length' is too small
-        # to fit the longest choice. However this works only if the choice values are strings,
-        # not enum members. So we create a new temporary (shallow) copy of this field, change its
-        # choices to (string) enum values and check that instead.
-        other = self.__copy__()
-        other.choices = other.get_choices()
-        errors = super(EnumField, other).check(**kwargs)
-        # point the errors back to self
-        for error in errors:
-            error.obj = self
-        return errors
-
-    def get_internal_type(self):
-        return "CharField"
-
-
-class EnumIntegerField(BaseEnumField):
-
-    def get_internal_type(self):
-        return "IntegerField"
+EnumIntegerField = partial(EnumField, internal_class=models.IntegerField)

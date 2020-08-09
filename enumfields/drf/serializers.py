@@ -1,5 +1,5 @@
 from enumfields.drf.fields import EnumField as EnumSerializerField
-from enumfields.fields import BaseEnumField
+from enumfields.fields import EnumField
 from rest_framework.fields import ModelField
 
 
@@ -10,7 +10,7 @@ class EnumSupportSerializerMixin:
         field_class, field_kwargs = (
             super().build_standard_field(field_name, model_field)
         )
-        if isinstance(model_field, BaseEnumField):
+        if isinstance(model_field, EnumField):
             if issubclass(field_class, ModelField):
                 del field_kwargs["model_field"]
             field_class = EnumSerializerField
